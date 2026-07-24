@@ -157,6 +157,7 @@ import sharp from 'sharp';
 import { PassThrough, Readable } from 'stream';
 import { v4 } from 'uuid';
 
+import { resetBaileysClientLifecycle, resetBaileysQrLifecycle } from './baileys-session-lifecycle';
 import { BaileysMessageProcessor } from './baileysMessage.processor';
 import { buildInteractiveBizNode, buildListBizNode, toNativeFlowButton } from './helpers/interactiveMessage.helper';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
@@ -346,6 +347,8 @@ export class BaileysStartupService extends ChannelStartupService {
       where: { id: this.instanceId },
       data: { connectionStatus: 'close' },
     });
+
+    resetBaileysQrLifecycle(this.instance);
   }
 
   public async getProfileName() {
@@ -791,7 +794,9 @@ export class BaileysStartupService extends ChannelStartupService {
       },
     };
 
-    this.endSession = false;
+    const lifecycle = resetBaileysClientLifecycle();
+    this.endSession = lifecycle.endSession;
+    this.isDeleting = lifecycle.isDeleting;
 
     this.client = makeWASocket(socketConfig);
 
