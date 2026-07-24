@@ -53,6 +53,7 @@ describe('recuperação de sessão Baileys', () => {
     assert.equal(packageJson.dependencies.baileys, '7.0.0-rc13');
     assert.equal(packageLock.packages[''].dependencies.baileys, '7.0.0-rc13');
     assert.equal(packageLock.packages['node_modules/baileys'].version, '7.0.0-rc13');
+    await access(resolve(projectRoot, 'patches'));
     await assert.rejects(
       access(resolve(projectRoot, 'patches/baileys+7.0.0-rc.6.patch')),
       (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
