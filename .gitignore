@@ -36,6 +36,7 @@ lerna-debug.log*
 !/instances/.gitkeep
 /test/*
 !/test/whatsapp-baileys-session-recovery.test.ts
+!/test/whatsapp-baileys-message-update.test.ts
 /src/env.yml
 /store
 *.env
