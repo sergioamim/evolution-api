@@ -1,9 +1,11 @@
 import {
   ArchiveChatDto,
   BlockUserDto,
+  DecryptPollVoteDto,
   DeleteMessage,
   getBase64FromMediaMessageDto,
   MarkChatUnreadDto,
+  MarkMessageAsPlayedDto,
   NumberDto,
   PrivacySettingDto,
   ProfileNameDto,
@@ -28,6 +30,10 @@ export class ChatController {
 
   public async readMessage({ instanceName }: InstanceDto, data: ReadMessageDto) {
     return await this.waMonitor.waInstances[instanceName].markMessageAsRead(data);
+  }
+
+  public async markMessageAsPlayed({ instanceName }: InstanceDto, data: MarkMessageAsPlayedDto) {
+    return await this.waMonitor.waInstances[instanceName].markMessageAsPlayed(data);
   }
 
   public async archiveChat({ instanceName }: InstanceDto, data: ArchiveChatDto) {
@@ -112,5 +118,17 @@ export class ChatController {
 
   public async blockUser({ instanceName }: InstanceDto, data: BlockUserDto) {
     return await this.waMonitor.waInstances[instanceName].blockUser(data);
+  }
+
+  public async decryptPollVote({ instanceName }: InstanceDto, data: DecryptPollVoteDto) {
+    const pollCreationMessageKey = {
+      id: data.message.key.id,
+      remoteJid: data.remoteJid,
+    };
+    return await this.waMonitor.waInstances[instanceName].baileysDecryptPollVote(pollCreationMessageKey);
+  }
+
+  public async fetchChannels({ instanceName }: InstanceDto, query: Query<Contact>) {
+    return await this.waMonitor.waInstances[instanceName].fetchChannels(query);
   }
 }

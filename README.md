@@ -124,6 +124,33 @@ docker run -p 8080:8080 --env-file .env evoapicloud/evolution-api:latest
 
 ---
 
+## License Activation
+
+Starting from **v2.4.0**, every Evolution API instance must be activated
+against the Evolution Foundation licensing server before serving API
+traffic. While unactivated, business endpoints return
+`HTTP 503 LICENSE_REQUIRED` with a `register_url` pointing to the manager
+UI.
+
+There are two ways to activate:
+
+1. **Set a known licensing key** as `AUTHENTICATION_API_KEY` in your
+   `.env`. The server validates it on boot, persists it locally and
+   activates the instance silently.
+2. **Activate via the manager UI** at `https://<your-host>/manager/login`.
+   On first login the manager detects an unlicensed backend and redirects
+   you to the registration server; once you complete the form you are
+   redirected back and the dashboard becomes accessible.
+
+Activation is a one-time operation — the key is persisted in the
+`RuntimeConfig` table and reused across restarts. The licensing server is
+only consulted again for fire-and-forget heartbeats (telemetry) and a
+best-effort `/v1/deactivate` notice on graceful shutdown.
+
+Full activation guide: <https://docs.evolutionfoundation.com.br/licensing>
+
+---
+
 ## Architecture
 
 Evolution API is built with a multi-provider, event-driven architecture:

@@ -70,6 +70,10 @@ export class ReadMessageDto {
   readMessages: Key[];
 }
 
+export class MarkMessageAsPlayedDto {
+  playedMessages: Key[];
+}
+
 export class LastMessage {
   key: Key;
   messageTimestamp?: number;
@@ -126,4 +130,13 @@ export class UpdateMessageDto extends Metadata {
 export class BlockUserDto {
   number: string;
   status: 'block' | 'unblock';
+}
+
+export class DecryptPollVoteDto {
+  message: {
+    key: {
+      id: string;
+    };
+  };
+  remoteJid: string;
 }
