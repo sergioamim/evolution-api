@@ -166,7 +166,11 @@ import {
   resolveBaileysMessageUpdateRemoteJid,
   shouldAdvanceBaileysMessageStatus,
 } from './baileys-message-update';
-import { resetBaileysClientLifecycle, resetBaileysQrLifecycle } from './baileys-session-lifecycle';
+import {
+  BaileysConnectionLifecycle,
+  resetBaileysClientLifecycle,
+  resetBaileysQrLifecycle,
+} from './baileys-session-lifecycle';
 import { BaileysMessageProcessor } from './baileysMessage.processor';
 import { buildInteractiveBizNode, buildListBizNode, toNativeFlowButton } from './helpers/interactiveMessage.helper';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
@@ -272,6 +276,7 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly userDevicesCache: CacheStore = new NodeCache({ stdTTL: 300000, useClones: false });
   private endSession = false;
   private isDeleting = false; // Flag to prevent reconnection during deletion
+  private readonly connectionLifecycle = new BaileysConnectionLifecycle();
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
 
@@ -297,6 +302,7 @@ export class BaileysStartupService extends ChannelStartupService {
     // Mark instance as deleting to prevent reconnection attempts.
     this.isDeleting = true;
     this.endSession = true;
+    this.connectionLifecycle.invalidate();
 
     this.messageProcessor.onDestroy();
 
@@ -393,7 +399,19 @@ export class BaileysStartupService extends ChannelStartupService {
     };
   }
 
-  private async connectionUpdate({ qr, connection, lastDisconnect }: Partial<ConnectionState>) {
+  private async connectionUpdate(
+    { qr, connection, lastDisconnect }: Partial<ConnectionState>,
+    client: WASocket,
+    generation: number,
+  ) {
+    if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+      this.logger.debug({
+        message: 'Ignoring connection update from superseded Baileys client',
+        instanceName: this.instance.name,
+        generation,
+      });
+      return;
+    }
     // Enhanced logging for connection updates
     const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
     this.logger.info({
@@ -431,6 +449,7 @@ export class BaileysStartupService extends ChannelStartupService {
         });
 
         this.endSession = true;
+        this.connectionLifecycle.cancelReconnect();
 
         return this.eventEmitter.emit('no.connection', this.instance.name);
       }
@@ -448,12 +467,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
       if (this.phoneNumber) {
         await delay(1000);
-        this.instance.qrcode.pairingCode = await this.client.requestPairingCode(this.phoneNumber);
+        if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+          return;
+        }
+        this.instance.qrcode.pairingCode = await client.requestPairingCode(this.phoneNumber);
       } else {
         this.instance.qrcode.pairingCode = null;
       }
 
       qrcode.toDataURL(qr, optsQrcode, (error, base64) => {
+        if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+          return;
+        }
         if (error) {
           this.logger.error('Qrcode generate failed:' + error.toString());
           return;
@@ -507,7 +532,14 @@ export class BaileysStartupService extends ChannelStartupService {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       // 408 = request timeout — added per #2501 to avoid reconnect loops on
       // transient network drops where the server returned a 408 in the close.
-      const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406, 408];
+      const codesToNotReconnect = [
+        DisconnectReason.loggedOut,
+        DisconnectReason.forbidden,
+        DisconnectReason.connectionReplaced,
+        402,
+        406,
+        408,
+      ];
 
       // FIX: Do not reconnect if it's the initial connection (waiting for QR code)
       // This prevents infinite loop that blocks QR code generation
@@ -528,12 +560,20 @@ export class BaileysStartupService extends ChannelStartupService {
       });
 
       if (shouldReconnect) {
-        // Add 3 second delay before reconnection to prevent rapid reconnection loops
-        this.logger.info('Reconnecting in 3 seconds...');
-        setTimeout(async () => {
-          await this.connectToWhatsapp(this.phoneNumber);
-        }, 3000);
+        const scheduled = this.connectionLifecycle.scheduleReconnect(
+          generation,
+          () => this.connectToWhatsapp(this.phoneNumber),
+          3000,
+          (error) =>
+            this.logger.error({
+              message: 'Scheduled Baileys reconnection failed',
+              instanceName: this.instance.name,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+        );
+        this.logger.info(scheduled ? 'Reconnecting in 3 seconds...' : 'Reconnect already scheduled or superseded');
       } else {
+        this.connectionLifecycle.cancelReconnect();
         this.logger.info(`Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`);
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
@@ -562,19 +602,20 @@ export class BaileysStartupService extends ChannelStartupService {
         }
 
         this.eventEmitter.emit('logout.instance', this.instance.name, 'inner');
-        this.client?.ws?.close();
-        this.client.end(new Error('Close connection'));
+        client.ws?.close();
+        client.end(new Error('Close connection'));
 
         this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, ...this.stateConnection });
       }
     }
 
     if (connection === 'open') {
-      if (!this.client?.user?.id) {
+      this.connectionLifecycle.cancelReconnect();
+      if (!client.user?.id) {
         this.logger.warn('connectionUpdate: connection open but client.user is undefined, skipping');
         return;
       }
-      this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
+      this.instance.wuid = client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
         this.instance.profilePictureUrl = profilePic.profilePictureUrl;
@@ -697,7 +738,7 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
-  private async createClient(number?: string): Promise<WASocket> {
+  private async createClient(number: string | undefined, generation: number): Promise<WASocket> {
     this.instance.authState = await this.defineAuthState();
 
     if (number) {
@@ -803,25 +844,43 @@ export class BaileysStartupService extends ChannelStartupService {
       },
     };
 
+    if (!this.connectionLifecycle.isCurrent(generation)) {
+      throw new Error(`Baileys connection attempt superseded for instance ${this.instance.name}`);
+    }
+
     const lifecycle = resetBaileysClientLifecycle();
     this.endSession = lifecycle.endSession;
     this.isDeleting = lifecycle.isDeleting;
 
-    this.client = makeWASocket(socketConfig);
-
-    if (this.localSettings.wavoipToken && this.localSettings.wavoipToken.length > 0) {
-      useVoiceCallsBaileys(this.localSettings.wavoipToken, this.client, this.connectionStatus.state as any, true);
+    const previousClient = this.client;
+    if (previousClient) {
+      try {
+        previousClient.ws?.close();
+        previousClient.end(new Error('Baileys client superseded'));
+      } catch {
+        // The previous websocket may already be closed.
+      }
     }
 
-    this.eventHandler();
+    this.stateConnection = { state: 'connecting', statusReason: 200 };
+    const client = makeWASocket(socketConfig);
+    this.client = client;
 
-    this.client.ws.on('CB:call', (packet) => {
+    if (this.localSettings.wavoipToken && this.localSettings.wavoipToken.length > 0) {
+      useVoiceCallsBaileys(this.localSettings.wavoipToken, client, this.connectionStatus.state as any, true);
+    }
+
+    this.eventHandler(client, generation);
+
+    client.ws.on('CB:call', (packet) => {
+      if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) return;
       console.log('CB:call', packet);
       const payload = { event: 'CB:call', packet: packet };
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
     });
 
-    this.client.ws.on('CB:ack,class:call', (packet) => {
+    client.ws.on('CB:ack,class:call', (packet) => {
+      if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) return;
       console.log('CB:ack,class:call', packet);
       const payload = { event: 'CB:ack,class:call', packet: packet };
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
@@ -829,35 +888,47 @@ export class BaileysStartupService extends ChannelStartupService {
 
     this.phoneNumber = number;
 
-    return this.client;
+    return client;
   }
 
   public async connectToWhatsapp(number?: string): Promise<WASocket> {
-    try {
-      this.loadChatwoot();
-      this.loadSettings();
-      this.loadWebhook();
-      this.loadProxy();
+    return this.startConnection(number, false);
+  }
 
-      // Remontar o messageProcessor para garantir que está funcionando após reconexão
-      this.messageProcessor.mount({
-        onMessageReceive: this.messageHandle['messages.upsert'].bind(this),
-      });
-
-      return await this.createClient(number);
-    } catch (error) {
-      this.logger.error(error);
-      throw new InternalServerErrorException(error?.toString());
+  private async startConnection(number: string | undefined, force: boolean): Promise<WASocket> {
+    if (
+      !force &&
+      this.client &&
+      !this.endSession &&
+      !this.isDeleting &&
+      (this.stateConnection.state === 'connecting' || this.stateConnection.state === 'open')
+    ) {
+      return this.client;
     }
+
+    return this.connectionLifecycle.runSingleFlight(async () => {
+      const generation = this.connectionLifecycle.beginConnection();
+      try {
+        this.loadChatwoot();
+        this.loadSettings();
+        this.loadWebhook();
+        this.loadProxy();
+
+        // Remontar o messageProcessor para garantir que está funcionando após reconexão
+        this.messageProcessor.mount({
+          onMessageReceive: this.messageHandle['messages.upsert'].bind(this),
+        });
+
+        return await this.createClient(number, generation);
+      } catch (error) {
+        this.logger.error(error);
+        throw new InternalServerErrorException(error?.toString());
+      }
+    });
   }
 
   public async reloadConnection(): Promise<WASocket> {
-    try {
-      return await this.createClient(this.phoneNumber);
-    } catch (error) {
-      this.logger.error(error);
-      throw new InternalServerErrorException(error?.toString());
-    }
+    return this.startConnection(this.phoneNumber, true);
   }
 
   private readonly chatHandle = {
@@ -2114,13 +2185,20 @@ export class BaileysStartupService extends ChannelStartupService {
     },
   };
 
-  private eventHandler() {
-    this.client.ev.process(async (events) => {
+  private eventHandler(client: WASocket, generation: number) {
+    client.ev.process(async (events) => {
+      if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+        return;
+      }
       this.eventProcessingQueue = this.eventProcessingQueue.then(async () => {
         try {
-          if (!this.endSession) {
+          if (!this.endSession && this.connectionLifecycle.isCurrent(generation) && client === this.client) {
             const database = this.configService.get<Database>('DATABASE');
             const settings = await this.findSettings();
+
+            if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+              return;
+            }
 
             if (events.call) {
               const call = events.call[0];
@@ -2142,7 +2220,7 @@ export class BaileysStartupService extends ChannelStartupService {
             }
 
             if (events['connection.update']) {
-              this.connectionUpdate(events['connection.update']);
+              await this.connectionUpdate(events['connection.update'], client, generation);
             }
 
             if (events['creds.update']) {
