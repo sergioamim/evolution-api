@@ -164,6 +164,7 @@ import {
   dispatchBaileysMessageUpdate,
   normalizeBaileysInboundMessageRemoteJid,
   resolveBaileysMessageUpdateRemoteJid,
+  scheduleBaileysContactSync,
   shouldAdvanceBaileysMessageStatus,
 } from './baileys-message-update';
 import {
@@ -279,6 +280,7 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly connectionLifecycle = new BaileysConnectionLifecycle();
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
+  private readonly contactSyncInFlight = new Map<string, Promise<void>>();
 
   // Cumulative history sync counters (reset on new sync or completion)
   private historySyncMessageCount = 0;
@@ -1760,68 +1762,7 @@ export class BaileysStartupService extends ChannelStartupService {
             pushName: messageRaw.pushName,
           });
 
-          const contact = await this.prismaRepository.contact.findFirst({
-            where: { remoteJid: canonicalRemoteJid, instanceId: this.instanceId },
-          });
-
-          const contactRaw: {
-            remoteJid: string;
-            pushName: string;
-            profilePicUrl?: string;
-            instanceId: string;
-          } = {
-            remoteJid: canonicalRemoteJid,
-            pushName: received.key.fromMe ? '' : received.key.fromMe == null ? '' : received.pushName,
-            profilePicUrl: (await this.profilePicture(canonicalRemoteJid)).profilePictureUrl,
-            instanceId: this.instanceId,
-          };
-
-          if (contactRaw.remoteJid === 'status@broadcast') {
-            continue;
-          }
-
-          if (contactRaw.remoteJid.includes('@s.whatsapp') || contactRaw.remoteJid.includes('@lid')) {
-            await saveOnWhatsappCache([
-              {
-                remoteJid:
-                  (messageRaw.key as any).addressingMode === 'lid'
-                    ? (messageRaw.key as any).remoteJidAlt
-                    : (messageRaw.key as any).remoteJid,
-                remoteJidAlt: (messageRaw.key as any).remoteJidAlt,
-                lid: (messageRaw.key as any).addressingMode === 'lid' ? 'lid' : null,
-              },
-            ]);
-          }
-
-          if (contact) {
-            this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
-
-            if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-              await this.chatwootService.eventWhatsapp(
-                Events.CONTACTS_UPDATE,
-                { instanceName: this.instance.name, instanceId: this.instanceId },
-                contactRaw,
-              );
-            }
-
-            if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
-              await this.prismaRepository.contact.upsert({
-                where: { remoteJid_instanceId: { remoteJid: contactRaw.remoteJid, instanceId: contactRaw.instanceId } },
-                create: contactRaw,
-                update: contactRaw,
-              });
-
-            continue;
-          }
-
-          this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
-
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
-            await this.prismaRepository.contact.upsert({
-              where: { remoteJid_instanceId: { remoteJid: contactRaw.remoteJid, instanceId: contactRaw.instanceId } },
-              update: contactRaw,
-              create: contactRaw,
-            });
+          this.scheduleContactSync(received, canonicalRemoteJid, messageRaw);
         }
       } catch (error) {
         this.logger.error(error);
@@ -2330,6 +2271,86 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       });
     });
+  }
+
+  private scheduleContactSync(received: WAMessage, canonicalRemoteJid: string, messageRaw: any) {
+    if (canonicalRemoteJid === 'status@broadcast') {
+      return;
+    }
+
+    scheduleBaileysContactSync({
+      remoteJid: canonicalRemoteJid,
+      inFlight: this.contactSyncInFlight,
+      sync: () => this.syncContactFromMessage(received, canonicalRemoteJid, messageRaw),
+      onError: (error) =>
+        this.logger.error({
+          message: 'Background contact sync failed',
+          instanceName: this.instance.name,
+          remoteJid: canonicalRemoteJid,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    });
+  }
+
+  private async syncContactFromMessage(received: WAMessage, canonicalRemoteJid: string, messageRaw: any) {
+    const contact = await this.prismaRepository.contact.findFirst({
+      where: { remoteJid: canonicalRemoteJid, instanceId: this.instanceId },
+    });
+
+    const contactRaw: {
+      remoteJid: string;
+      pushName: string;
+      profilePicUrl?: string;
+      instanceId: string;
+    } = {
+      remoteJid: canonicalRemoteJid,
+      pushName: received.key.fromMe ? '' : received.key.fromMe == null ? '' : received.pushName,
+      profilePicUrl: contact?.profilePicUrl ?? undefined,
+      instanceId: this.instanceId,
+    };
+
+    if (contactRaw.remoteJid.includes('@s.whatsapp') || contactRaw.remoteJid.includes('@lid')) {
+      await saveOnWhatsappCache([
+        {
+          remoteJid:
+            (messageRaw.key as any).addressingMode === 'lid'
+              ? (messageRaw.key as any).remoteJidAlt
+              : (messageRaw.key as any).remoteJid,
+          remoteJidAlt: (messageRaw.key as any).remoteJidAlt,
+          lid: (messageRaw.key as any).addressingMode === 'lid' ? 'lid' : null,
+        },
+      ]);
+    }
+
+    if (contact) {
+      this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
+
+      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
+        await this.chatwootService.eventWhatsapp(
+          Events.CONTACTS_UPDATE,
+          { instanceName: this.instance.name, instanceId: this.instanceId },
+          contactRaw,
+        );
+      }
+
+      if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
+        await this.prismaRepository.contact.upsert({
+          where: { remoteJid_instanceId: { remoteJid: contactRaw.remoteJid, instanceId: contactRaw.instanceId } },
+          create: contactRaw,
+          update: contactRaw,
+        });
+
+      return;
+    }
+
+    this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
+
+    if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
+      await this.prismaRepository.contact.upsert({
+        where: { remoteJid_instanceId: { remoteJid: contactRaw.remoteJid, instanceId: contactRaw.instanceId } },
+        update: contactRaw,
+        create: contactRaw,
+      });
   }
 
   private historySyncNotification(msg: proto.Message.IHistorySyncNotification) {

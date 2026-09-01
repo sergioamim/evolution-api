@@ -7,6 +7,7 @@ import {
   dispatchBaileysMessageUpdate,
   normalizeBaileysInboundMessageRemoteJid,
   resolveBaileysMessageUpdateRemoteJid,
+  scheduleBaileysContactSync,
   shouldAdvanceBaileysMessageStatus,
 } from '../src/api/integrations/channel/whatsapp/baileys-message-update';
 
@@ -100,6 +101,46 @@ describe('atualizações de status de mensagem do Baileys', () => {
 
     assert.deepEqual(webhooks, []);
     assert.equal(result.dispatched, false);
+  });
+
+  it('sincroniza o contato fora do caminho crítico e deduplica mensagens em rajada', async () => {
+    const remoteJid = '5521983424242@s.whatsapp.net';
+    const inFlight = new Map<string, Promise<void>>();
+    let releaseSync: () => void = () => undefined;
+    let syncCount = 0;
+
+    const firstScheduled = scheduleBaileysContactSync({
+      remoteJid,
+      inFlight,
+      sync: async () => {
+        syncCount += 1;
+        await new Promise<void>((resolve) => {
+          releaseSync = resolve;
+        });
+      },
+      onError: () => undefined,
+    });
+    const duplicateScheduled = scheduleBaileysContactSync({
+      remoteJid,
+      inFlight,
+      sync: async () => {
+        syncCount += 1;
+      },
+      onError: () => undefined,
+    });
+
+    assert.equal(firstScheduled, true);
+    assert.equal(duplicateScheduled, false);
+    assert.equal(inFlight.has(remoteJid), true);
+
+    await Promise.resolve();
+    assert.equal(syncCount, 1);
+
+    releaseSync();
+    await inFlight.get(remoteJid);
+    await Promise.resolve();
+
+    assert.equal(inFlight.has(remoteJid), false);
   });
 
   it('publica o webhook mesmo quando a mensagem não existe no banco local', async () => {

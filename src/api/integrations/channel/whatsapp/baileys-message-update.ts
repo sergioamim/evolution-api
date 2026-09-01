@@ -95,6 +95,30 @@ export async function dispatchBaileysInboundWebhookBeforeSideEffects<T extends B
   return { dispatched: true };
 }
 
+type ScheduleBaileysContactSyncParams = {
+  remoteJid: string;
+  inFlight: Map<string, Promise<void>>;
+  sync: () => void | Promise<void>;
+  onError: (error: unknown) => void;
+};
+
+export function scheduleBaileysContactSync({ remoteJid, inFlight, sync, onError }: ScheduleBaileysContactSyncParams) {
+  if (inFlight.has(remoteJid)) {
+    return false;
+  }
+
+  const task = Promise.resolve().then(sync);
+  inFlight.set(remoteJid, task);
+
+  void task.catch(onError).finally(() => {
+    if (inFlight.get(remoteJid) === task) {
+      inFlight.delete(remoteJid);
+    }
+  });
+
+  return true;
+}
+
 type DispatchBaileysMessageUpdateParams<T extends BaileysMessageUpdatePayload> = {
   payload: T;
   persist: boolean;
