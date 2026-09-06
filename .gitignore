@@ -37,6 +37,9 @@ lerna-debug.log*
 /test/*
 !/test/whatsapp-baileys-session-recovery.test.ts
 !/test/whatsapp-baileys-message-update.test.ts
+!/test/core-utils.test.ts
+!/test/validation-schemas.test.ts
+!/test/http-routes-and-guards.test.ts
 /src/env.yml
 /store
 *.env

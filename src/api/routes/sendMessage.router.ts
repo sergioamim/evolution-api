@@ -1,4 +1,5 @@
 import { RouterBroker } from '@api/abstract/abstract.router';
+import type { SendMessageController } from '@api/controllers/sendMessage.controller';
 import {
   SendAudioDto,
   SendButtonsDto,
@@ -15,7 +16,6 @@ import {
   SendTemplateDto,
   SendTextDto,
 } from '@api/dto/sendMessage.dto';
-import { sendMessageController } from '@api/server.module';
 import {
   audioMessageSchema,
   buttonsMessageSchema,
@@ -35,12 +35,15 @@ import {
 import { RequestHandler, Router } from 'express';
 import multer from 'multer';
 
-import { HttpStatus } from './index.router';
+import { HttpStatus } from './http-status';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 export class MessageRouter extends RouterBroker {
-  constructor(...guards: RequestHandler[]) {
+  constructor(
+    readonly controller: Pick<SendMessageController, keyof SendMessageController>,
+    ...guards: RequestHandler[]
+  ) {
     super();
     this.router
       .post(this.routerPath('sendTemplate'), ...guards, async (req, res) => {
@@ -48,7 +51,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: templateMessageSchema,
           ClassRef: SendTemplateDto,
-          execute: (instance, data) => sendMessageController.sendTemplate(instance, data),
+          execute: (instance, data) => controller.sendTemplate(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -58,7 +61,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: textMessageSchema,
           ClassRef: SendTextDto,
-          execute: (instance, data) => sendMessageController.sendText(instance, data),
+          execute: (instance, data) => controller.sendText(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -70,7 +73,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: mediaMessageSchema,
           ClassRef: SendMediaDto,
-          execute: (instance) => sendMessageController.sendMedia(instance, bodyData, req.file as any),
+          execute: (instance) => controller.sendMedia(instance, bodyData, req.file as any),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -82,7 +85,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: ptvMessageSchema,
           ClassRef: SendPtvDto,
-          execute: (instance) => sendMessageController.sendPtv(instance, bodyData, req.file as any),
+          execute: (instance) => controller.sendPtv(instance, bodyData, req.file as any),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -94,7 +97,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: audioMessageSchema,
           ClassRef: SendMediaDto,
-          execute: (instance) => sendMessageController.sendWhatsAppAudio(instance, bodyData, req.file as any),
+          execute: (instance) => controller.sendWhatsAppAudio(instance, bodyData, req.file as any),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -107,7 +110,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: statusMessageSchema,
           ClassRef: SendStatusDto,
-          execute: (instance) => sendMessageController.sendStatus(instance, bodyData, req.file as any),
+          execute: (instance) => controller.sendStatus(instance, bodyData, req.file as any),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -119,7 +122,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: stickerMessageSchema,
           ClassRef: SendStickerDto,
-          execute: (instance) => sendMessageController.sendSticker(instance, bodyData, req.file as any),
+          execute: (instance) => controller.sendSticker(instance, bodyData, req.file as any),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -129,7 +132,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: locationMessageSchema,
           ClassRef: SendLocationDto,
-          execute: (instance, data) => sendMessageController.sendLocation(instance, data),
+          execute: (instance, data) => controller.sendLocation(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -139,7 +142,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: contactMessageSchema,
           ClassRef: SendContactDto,
-          execute: (instance, data) => sendMessageController.sendContact(instance, data),
+          execute: (instance, data) => controller.sendContact(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -149,7 +152,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: reactionMessageSchema,
           ClassRef: SendReactionDto,
-          execute: (instance, data) => sendMessageController.sendReaction(instance, data),
+          execute: (instance, data) => controller.sendReaction(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -159,7 +162,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: pollMessageSchema,
           ClassRef: SendPollDto,
-          execute: (instance, data) => sendMessageController.sendPoll(instance, data),
+          execute: (instance, data) => controller.sendPoll(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -169,7 +172,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: listMessageSchema,
           ClassRef: SendListDto,
-          execute: (instance, data) => sendMessageController.sendList(instance, data),
+          execute: (instance, data) => controller.sendList(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -179,7 +182,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: buttonsMessageSchema,
           ClassRef: SendButtonsDto,
-          execute: (instance, data) => sendMessageController.sendButtons(instance, data),
+          execute: (instance, data) => controller.sendButtons(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -189,7 +192,7 @@ export class MessageRouter extends RouterBroker {
           request: req,
           schema: carouselMessageSchema,
           ClassRef: SendCarouselDto,
-          execute: (instance, data) => sendMessageController.sendCarousel(instance, data),
+          execute: (instance, data) => controller.sendCarousel(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);

@@ -76,12 +76,33 @@ describe('atualizações de status de mensagem do Baileys', () => {
       sendWebhook: (event) => webhooks.push(event),
     });
 
-    await assert.rejects(async () => {
-      throw new Error('database unavailable');
-    });
-
     assert.deepEqual(webhooks, [payload]);
     assert.equal(result.dispatched, true);
+  });
+
+  it('propaga falha do webhook e não persiste o ACK depois dela', async () => {
+    const persisted: unknown[] = [];
+
+    await assert.rejects(
+      dispatchBaileysMessageUpdate({
+        payload: {
+          messageId: 'local-message-id',
+          keyId: 'provider-message-id',
+          remoteJid: '5521983424242@s.whatsapp.net',
+          status: 'READ',
+        },
+        persist: true,
+        sendWebhook: async () => {
+          throw new Error('webhook unavailable');
+        },
+        persistUpdate: async (event) => {
+          persisted.push(event);
+        },
+      }),
+      /webhook unavailable/,
+    );
+
+    assert.deepEqual(persisted, []);
   });
 
   it('adia somente callback que depende de enriquecimento de mídia', async () => {

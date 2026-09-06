@@ -114,9 +114,9 @@ describe('recuperação de sessão Baileys', () => {
     const packageJson = JSON.parse(await readFile(resolve(projectRoot, 'package.json'), 'utf8'));
     const packageLock = JSON.parse(await readFile(resolve(projectRoot, 'package-lock.json'), 'utf8'));
 
-    assert.equal(packageJson.dependencies.baileys, '7.0.0-rc13');
-    assert.equal(packageLock.packages[''].dependencies.baileys, '7.0.0-rc13');
-    assert.equal(packageLock.packages['node_modules/baileys'].version, '7.0.0-rc13');
+    assert.equal(packageJson.dependencies.baileys, '7.0.0-rc14');
+    assert.equal(packageLock.packages[''].dependencies.baileys, '7.0.0-rc14');
+    assert.equal(packageLock.packages['node_modules/baileys'].version, '7.0.0-rc14');
     await access(resolve(projectRoot, 'patches'));
     await assert.rejects(
       access(resolve(projectRoot, 'patches/baileys+7.0.0-rc.6.patch')),
@@ -129,9 +129,9 @@ describe('recuperação de sessão Baileys', () => {
     const packageJson = JSON.parse(await readFile(resolve(projectRoot, 'package.json'), 'utf8'));
     const packageLock = JSON.parse(await readFile(resolve(projectRoot, 'package-lock.json'), 'utf8'));
 
-    assert.equal(packageJson.dependencies['@aws-sdk/client-sqs'], '^3.1095.0');
+    assert.equal(packageJson.dependencies['@aws-sdk/client-sqs'], '^3.1127.0');
     assert.equal(packageJson.dependencies.minio, '^8.0.7');
-    assert.equal(packageLock.packages[''].dependencies['@aws-sdk/client-sqs'], '^3.1095.0');
+    assert.equal(packageLock.packages[''].dependencies['@aws-sdk/client-sqs'], '^3.1127.0');
     assert.equal(packageLock.packages[''].dependencies.minio, '^8.0.7');
     assert.equal(packageLock.packages['node_modules/@aws-sdk/xml-builder'].dependencies['fast-xml-parser'], undefined);
     assert.equal(packageLock.packages['node_modules/minio'].dependencies['fast-xml-parser'], '^5.3.4');

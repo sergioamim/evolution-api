@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-namespace */
 import { JsonValue } from '@prisma/client/runtime/library';
-import { AuthenticationState, WAConnectionState } from 'baileys';
+import type { AuthenticationState, WAConnectionState } from 'baileys';
 
 export enum Events {
   APPLICATION_STARTUP = 'application.startup',

@@ -40,3 +40,6 @@ jobs:
 
     - name: Check build
       run: npm run build
+
+    - name: Run tests with coverage
+      run: npm run test:coverage

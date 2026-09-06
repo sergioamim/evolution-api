@@ -23,16 +23,9 @@ Isso corrige o estado preso depois de logout ou `401/device_removed`. A correç�
 
 ## Baileys
 
-Esta linha fixa `baileys` em `7.0.0-rc13` no `package.json` e no `package-lock.json`.
+Esta linha fixa `baileys` em `7.0.0-rc14` no `package.json` e no `package-lock.json`.
 
-A atualização partiu de `7.0.0-rc.9` porque `rc13`:
-
-- corrige fluxos de conexão travada e estado online sem socket saudável;
-- inclui correções de QR, identidade de sessão, ACK e limpeza de recursos;
-- incorpora nativamente a proteção que evita recalcular waveform já fornecida;
-- reduz o resultado observado de `npm audit` de 87 vulnerabilidades, sendo 3 críticas, para 64 vulnerabilidades, sendo 1 crítica.
-
-O arquivo `patches/baileys+7.0.0-rc.6.patch` foi removido porque sua única alteração já existe no código publicado do `rc13`. Manter esse patch gerava aviso de mismatch a cada `npm ci`.
+A atualização foi aplicada junto com a expansão da cobertura funcional e validada com instalação limpa, testes, lint e build. O arquivo `patches/baileys+7.0.0-rc.6.patch` continua removido porque a alteração já existe no código publicado das versões atuais do pacote.
 
 ### Política de atualização
 
@@ -61,6 +54,7 @@ O gate `npm run audit:critical` deve permanecer com exit code zero. Ele não afi
 npm ci
 npm run audit:critical
 npm test
+npm run test:coverage
 npm run lint:check
 DATABASE_PROVIDER=postgresql npm run db:generate
 DATABASE_PROVIDER=postgresql npm run build
@@ -70,8 +64,8 @@ Os testes automatizados cobrem os resets em memória. Eles não substituem a hom
 
 ## Release do fork
 
-- Tag: `v2.4.0-rc2-conceitofit.1`
-- Imagem: `ghcr.io/sergioamim/evolution-api:v2.4.0-rc2-conceitofit.1`
+- Tag: `v2.4.0-rc2-conceitofit.6`
+- Imagem: `ghcr.io/sergioamim/evolution-api:v2.4.0-rc2-conceitofit.6`
 - Rollback de produção: `evoapicloud/evolution-api:2.4.0-rc2`
 
 Tags do fork publicam somente no GHCR. O workflow Docker Hub legado é restrito ao repositório oficial `evolution-foundation/evolution-api`.

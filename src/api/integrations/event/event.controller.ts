@@ -1,7 +1,7 @@
 import { EventDto } from '@api/integrations/event/event.dto';
-import { PrismaRepository } from '@api/repository/repository.service';
-import { WAMonitoringService } from '@api/services/monitor.service';
-import { wa } from '@api/types/wa.types';
+import type { PrismaRepository } from '@api/repository/repository.service';
+import type { WAMonitoringService } from '@api/services/monitor.service';
+import type { wa } from '@api/types/wa.types';
 
 export type EmitData = {
   instanceName: string;

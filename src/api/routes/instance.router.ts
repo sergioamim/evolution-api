@@ -1,15 +1,16 @@
 import { RouterBroker } from '@api/abstract/abstract.router';
+import type { InstanceController } from '@api/controllers/instance.controller';
 import { InstanceDto, SetPresenceDto } from '@api/dto/instance.dto';
-import { instanceController } from '@api/server.module';
 import { ConfigService } from '@config/env.config';
 import { instanceSchema, presenceOnlySchema } from '@validate/validate.schema';
 import { RequestHandler, Router } from 'express';
 
-import { HttpStatus } from './index.router';
+import { HttpStatus } from './http-status';
 
 export class InstanceRouter extends RouterBroker {
   constructor(
     readonly configService: ConfigService,
+    readonly controller: Pick<InstanceController, keyof InstanceController>,
     ...guards: RequestHandler[]
   ) {
     super();
@@ -19,7 +20,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: instanceSchema,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.createInstance(instance),
+          execute: (instance) => controller.createInstance(instance),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -29,7 +30,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.restartInstance(instance),
+          execute: (instance) => controller.restartInstance(instance),
         });
 
         return res.status(HttpStatus.OK).json(response);
@@ -39,7 +40,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.connectToWhatsapp(instance),
+          execute: (instance) => controller.connectToWhatsapp(instance),
         });
 
         return res.status(HttpStatus.OK).json(response);
@@ -49,7 +50,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.connectionState(instance),
+          execute: (instance) => controller.connectionState(instance),
         });
 
         return res.status(HttpStatus.OK).json(response);
@@ -61,7 +62,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.fetchInstances(instance, key),
+          execute: (instance) => controller.fetchInstances(instance, key),
         });
 
         return res.status(HttpStatus.OK).json(response);
@@ -71,7 +72,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: presenceOnlySchema,
           ClassRef: SetPresenceDto,
-          execute: (instance, data) => instanceController.setPresence(instance, data),
+          execute: (instance, data) => controller.setPresence(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
@@ -81,7 +82,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.logout(instance),
+          execute: (instance) => controller.logout(instance),
         });
 
         return res.status(HttpStatus.OK).json(response);
@@ -91,7 +92,7 @@ export class InstanceRouter extends RouterBroker {
           request: req,
           schema: null,
           ClassRef: InstanceDto,
-          execute: (instance) => instanceController.deleteInstance(instance),
+          execute: (instance) => controller.deleteInstance(instance),
         });
 
         return res.status(HttpStatus.OK).json(response);
