@@ -12,6 +12,7 @@ export type BaileysClientLifecycle = {
 
 export class BaileysConnectionLifecycle {
   private generation = 0;
+  private reconnectAttempts = 0;
   private connectAttempt: Promise<unknown> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -25,6 +26,7 @@ export class BaileysConnectionLifecycle {
     this.cancelReconnect();
     this.generation += 1;
     this.connectAttempt = null;
+    this.resetReconnectBackoff();
   }
 
   public isCurrent(generation: number): boolean {
@@ -63,6 +65,16 @@ export class BaileysConnectionLifecycle {
       void operation().catch((error) => onError?.(error));
     }, delayMs);
     return true;
+  }
+
+  public nextReconnectDelay(): number {
+    const delay = Math.min(3000 * 2 ** Math.min(this.reconnectAttempts, 5), 60_000);
+    this.reconnectAttempts += 1;
+    return delay;
+  }
+
+  public resetReconnectBackoff(): void {
+    this.reconnectAttempts = 0;
   }
 
   public cancelReconnect(): void {

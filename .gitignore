@@ -40,6 +40,7 @@ lerna-debug.log*
 !/test/core-utils.test.ts
 !/test/validation-schemas.test.ts
 !/test/http-routes-and-guards.test.ts
+!/test/whatsapp-timeout-media.test.ts
 /src/env.yml
 /store
 *.env

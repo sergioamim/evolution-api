@@ -1,0 +1,81 @@
+diff --git a/node_modules/baileys/lib/Socket/messages-send.js b/node_modules/baileys/lib/Socket/messages-send.js
+index d61e064..fb734c9 100644
+--- a/node_modules/baileys/lib/Socket/messages-send.js
++++ b/node_modules/baileys/lib/Socket/messages-send.js
+@@ -36,37 +36,46 @@ export const makeMessagesSocket = (config) => {
+     /** Per-socket media host; updated whenever media_conn is fetched. Defaults to the public WhatsApp host. */
+     let mediaHost = DEF_MEDIA_HOST;
+     const refreshMediaConn = async (forceGet = false) => {
+-        const media = await mediaConn;
+-        if (!media || forceGet || new Date().getTime() - media.fetchDate.getTime() > media.ttl * 1000) {
+-            mediaConn = (async () => {
+-                const result = await query({
+-                    tag: 'iq',
+-                    attrs: {
+-                        type: 'set',
+-                        xmlns: 'w:m',
+-                        to: S_WHATSAPP_NET
+-                    },
+-                    content: [{ tag: 'media_conn', attrs: {} }]
+-                });
+-                const mediaConnNode = getBinaryNodeChild(result, 'media_conn');
+-                // TODO: explore full length of data that whatsapp provides
+-                const node = {
+-                    hosts: getBinaryNodeChildren(mediaConnNode, 'host').map(({ attrs }) => ({
+-                        hostname: attrs.hostname,
+-                        maxContentLengthBytes: +attrs.maxContentLengthBytes
+-                    })),
+-                    auth: mediaConnNode.attrs.auth,
+-                    ttl: +mediaConnNode.attrs.ttl,
+-                    fetchDate: new Date()
+-                };
+-                logger.debug('fetched media conn');
+-                if (node.hosts[0]) {
+-                    mediaHost = node.hosts[0].hostname;
+-                }
+-                return node;
+-            })();
++        const previous = mediaConn;
++        if (previous && !forceGet) {
++            const media = await previous;
++            if (Date.now() - media.fetchDate.getTime() <= media.ttl * 1000) {
++                return media;
++            }
++            // Another caller already replaced the expired query.
++            if (mediaConn !== previous && mediaConn) {
++                return mediaConn;
++            }
+         }
+-        return mediaConn;
++        const pending = (async () => {
++            const result = await query({
++                tag: 'iq',
++                attrs: { type: 'set', xmlns: 'w:m', to: S_WHATSAPP_NET },
++                content: [{ tag: 'media_conn', attrs: {} }]
++            });
++            const mediaConnNode = getBinaryNodeChild(result, 'media_conn');
++            const hosts = getBinaryNodeChildren(mediaConnNode, 'host').map(({ attrs }) => ({
++                hostname: attrs.hostname,
++                maxContentLengthBytes: +attrs.maxContentLengthBytes
++            }));
++            const auth = mediaConnNode?.attrs?.auth;
++            const ttl = Number(mediaConnNode?.attrs?.ttl);
++            if (!auth || !Number.isFinite(ttl) || ttl <= 0 || !hosts.length || hosts.some(host => !host.hostname)) {
++                throw new Boom('WhatsApp media connection response is missing or invalid', { statusCode: 408 });
++            }
++            const node = { hosts, auth, ttl, fetchDate: new Date() };
++            logger.debug('fetched media conn');
++            mediaHost = hosts[0].hostname;
++            return node;
++        })();
++        mediaConn = pending;
++        // A failed query must not poison all subsequent uploads on this socket.
++        void pending.catch(() => {
++            if (mediaConn === pending) {
++                mediaConn = undefined;
++            }
++        });
++        return pending;
+     };
+     /**
+      * generic send receipt function

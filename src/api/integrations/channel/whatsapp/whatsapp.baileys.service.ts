@@ -532,15 +532,14 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      // 408 = request timeout — added per #2501 to avoid reconnect loops on
-      // transient network drops where the server returned a 408 in the close.
+      // Timeouts (408) are recoverable: preserve credentials and retry with backoff.
+      // Only terminal disconnects may enter the logout/session cleanup path.
       const codesToNotReconnect = [
         DisconnectReason.loggedOut,
         DisconnectReason.forbidden,
         DisconnectReason.connectionReplaced,
         402,
         406,
-        408,
       ];
 
       // FIX: Do not reconnect if it's the initial connection (waiting for QR code)
@@ -562,10 +561,11 @@ export class BaileysStartupService extends ChannelStartupService {
       });
 
       if (shouldReconnect) {
+        const reconnectDelay = this.connectionLifecycle.nextReconnectDelay();
         const scheduled = this.connectionLifecycle.scheduleReconnect(
           generation,
           () => this.connectToWhatsapp(this.phoneNumber),
-          3000,
+          reconnectDelay,
           (error) =>
             this.logger.error({
               message: 'Scheduled Baileys reconnection failed',
@@ -573,7 +573,11 @@ export class BaileysStartupService extends ChannelStartupService {
               error: error instanceof Error ? error.message : String(error),
             }),
         );
-        this.logger.info(scheduled ? 'Reconnecting in 3 seconds...' : 'Reconnect already scheduled or superseded');
+        this.logger.info(
+          scheduled
+            ? `Reconnecting in ${reconnectDelay / 1000} seconds...`
+            : 'Reconnect already scheduled or superseded',
+        );
       } else {
         this.connectionLifecycle.cancelReconnect();
         this.logger.info(`Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`);
@@ -613,6 +617,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (connection === 'open') {
       this.connectionLifecycle.cancelReconnect();
+      this.connectionLifecycle.resetReconnectBackoff();
       if (!client.user?.id) {
         this.logger.warn('connectionUpdate: connection open but client.user is undefined, skipping');
         return;
@@ -3147,6 +3152,10 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   private async prepareMediaMessage(mediaMessage: MediaMessage) {
+    if (this.stateConnection.state !== 'open' || !this.client?.user?.id || !this.client.ws?.isOpen) {
+      throw new InternalServerErrorException('WhatsApp instance is not connected. Reconnect before sending media.');
+    }
+
     try {
       const type = mediaMessage.mediatype === 'ptv' ? 'video' : mediaMessage.mediatype;
 
