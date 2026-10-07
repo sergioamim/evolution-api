@@ -108,3 +108,19 @@ O pós-deploy precisa confirmar imagem/revisão, ausência de reinícios/OOM, es
 por instância, retry de 408 sem `LOGOUT`, recuperação de mídia após falha e entrega
 de um documento real a um destinatário de teste autorizado. Rollback para `.6`
 restaura o comportamento antigo e não recupera credenciais apagadas.
+
+## Publicação e deploy concluídos
+
+- Commit de implementação publicado na main: `005ee200644affc2e806d607556949333ef8a390`.
+- Tag Git/release: `v2.4.0-rc2-conceitofit.7`.
+- Build AMD64/ARM64 aprovado: https://github.com/sergioamim/evolution-api/actions/runs/37668536043.
+- Imagem publicada e efetivamente implantada: `ghcr.io/sergioamim/evolution-api@sha256:15bc85621842ae45dc5ec6eebe0e18a3a7c0ba394972772bd2f3d51a588f624a`.
+- O build duplicado da tag demorou além do principal e foi cancelado; a produção usa o digest imutável do build principal do mesmo commit. Não afirmar que uma imagem com a tag `.7` está publicada.
+- Definição persistente atualizada pela API Dokploy; `compose.deploy` concluído, status `done`. Env preservado.
+- Container iniciado em `2026-10-07T19:10:21Z`, revisão `005ee20`, `running`, restart count zero, sem OOM.
+- HTTP público 200.
+- Antes: uma sessão open, três close. Depois: a sessão bbc6fe36 voltou a open sem QR; 18e9b684 e saas connecting; d37174be close. São estados temporais, não estabilidade prolongada.
+- Logs desde o startup: zero ocorrências de erro attrs, LOGOUT, ECONNREFUSED, PrismaClientInitializationError e unhandledRejection na primeira verificação.
+- Smoke isolado executado na imagem e no container produtivo: resposta media_conn ausente gera erro explícito; tentativa seguinte recupera; concorrência compartilha consulta; cache válido reaproveitado. Sem tráfego de teste ao WhatsApp.
+- Rollback disponível na imagem `.6` e definição anterior guardada no control-plane com permissão 0600.
+- Não houve envio real de mensagem de teste. Sessões sem credenciais ainda podem precisar de pareamento.
