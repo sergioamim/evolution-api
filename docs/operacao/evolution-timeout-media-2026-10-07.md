@@ -115,7 +115,7 @@ restaura o comportamento antigo e não recupera credenciais apagadas.
 - Tag Git/release: `v2.4.0-rc2-conceitofit.7`.
 - Build AMD64/ARM64 aprovado: https://github.com/sergioamim/evolution-api/actions/runs/37668536043.
 - Imagem publicada e efetivamente implantada: `ghcr.io/sergioamim/evolution-api@sha256:15bc85621842ae45dc5ec6eebe0e18a3a7c0ba394972772bd2f3d51a588f624a`.
-- O build duplicado da tag demorou além do principal e foi cancelado; a produção usa o digest imutável do build principal do mesmo commit. Não afirmar que uma imagem com a tag `.7` está publicada.
+- O build duplicado da tag demorou além do principal e teve cancelamento solicitado (incluindo force-cancel); a produção usa o digest imutável do build principal do mesmo commit. Não afirmar que uma imagem com a tag `.7` está publicada.
 - Definição persistente atualizada pela API Dokploy; `compose.deploy` concluído, status `done`. Env preservado.
 - Container iniciado em `2026-10-07T19:10:21Z`, revisão `005ee20`, `running`, restart count zero, sem OOM.
 - HTTP público 200.
