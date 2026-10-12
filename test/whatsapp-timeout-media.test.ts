@@ -134,6 +134,29 @@ describe('WhatsApp timeout and media regression', () => {
     assert.equal(recorded.writes.length, 1);
   });
 
+  for (const [label, pair] of [
+    ['a known wuid', (subject: any) => (subject.instance.wuid = 'test-user')],
+    ['stored credentials', (subject: any) => (subject.client.authState = { creds: { me: { id: 'test-user' } } })],
+  ] as const) {
+    it(`a QR-expiry 408 on an instance with ${label} keeps the session and retries`, async () => {
+      const { subject, recorded } = connectionHarness();
+      subject.instance.wuid = undefined;
+      subject.instance.qrcode.count = 6;
+      pair(subject);
+      await subject.connectionUpdate(
+        {
+          connection: 'close',
+          lastDisconnect: { error: { message: 'QR refs attempts ended', output: { statusCode: 408 } } },
+        },
+        subject.client,
+        0,
+      );
+      assert.equal(recorded.reconnects.length, 1);
+      assert.deepEqual(recorded.events, []);
+      assert.deepEqual(recorded.writes, []);
+    });
+  }
+
   it('a retry that is not scheduled does not advance the backoff', async () => {
     const { subject, recorded } = connectionHarness();
     const attempted: number[] = [];

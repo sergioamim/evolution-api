@@ -551,10 +551,14 @@ export class BaileysStartupService extends ChannelStartupService {
         return;
       }
 
-      // Baileys also reports an expired, never-scanned QR as 408. That is terminal: there are
-      // no credentials to preserve, and retrying would keep issuing QR codes until QRCODE_LIMIT.
+      // Baileys also reports an expired, never-scanned QR as 408. Only for an instance that was
+      // never paired is that terminal: there are no credentials to preserve, and retrying would
+      // keep issuing QR codes until QRCODE_LIMIT. A paired session must keep the backoff path.
       const isQrTimeout =
-        statusCode === DisconnectReason.timedOut && lastDisconnect?.error?.message === 'QR refs attempts ended';
+        statusCode === DisconnectReason.timedOut &&
+        lastDisconnect?.error?.message === 'QR refs attempts ended' &&
+        !this.instance.wuid &&
+        !client.authState?.creds?.me?.id;
 
       const shouldReconnect = !isQrTimeout && !codesToNotReconnect.includes(statusCode);
 
