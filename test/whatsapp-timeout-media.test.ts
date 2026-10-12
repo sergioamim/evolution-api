@@ -25,7 +25,7 @@ function serviceMethods(names: string[], dependencies: Record<string, unknown> =
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
   }).outputText;
   return runInNewContext(compiled, {
-    DisconnectReason: { loggedOut: 401, forbidden: 403, connectionReplaced: 440 },
+    DisconnectReason: { loggedOut: 401, forbidden: 403, connectionReplaced: 440, timedOut: 408 },
     Events: { STATUS_INSTANCE: 'status.instance', CONNECTION_UPDATE: 'connection.update' },
     BadRequestException: Error,
     InternalServerErrorException,
@@ -107,10 +107,50 @@ describe('WhatsApp timeout and media regression', () => {
 
   it('reconnection delay grows to a bounded maximum and resets after successful recovery', () => {
     const lifecycle = new BaileysConnectionLifecycle();
-    const delays = Array.from({ length: 7 }, () => lifecycle.nextReconnectDelay());
+    const delays = Array.from({ length: 7 }, () => {
+      const delay = lifecycle.reconnectDelay();
+      lifecycle.recordReconnectAttempt();
+      return delay;
+    });
     assert.deepEqual(delays, [3000, 6000, 12000, 24000, 48000, 60000, 60000]);
     lifecycle.resetReconnectBackoff();
-    assert.equal(lifecycle.nextReconnectDelay(), 3000);
+    assert.equal(lifecycle.reconnectDelay(), 3000);
+  });
+
+  it('an expired, never-scanned QR (408) ends the session instead of retrying', async () => {
+    const { subject, recorded } = connectionHarness();
+    subject.instance.wuid = undefined;
+    subject.instance.qrcode.count = 6;
+    await subject.connectionUpdate(
+      {
+        connection: 'close',
+        lastDisconnect: { error: { message: 'QR refs attempts ended', output: { statusCode: 408 } } },
+      },
+      subject.client,
+      0,
+    );
+    assert.deepEqual(recorded.reconnects, []);
+    assert.deepEqual(recorded.events, ['logout.instance']);
+    assert.equal(recorded.writes.length, 1);
+  });
+
+  it('a retry that is not scheduled does not advance the backoff', async () => {
+    const { subject, recorded } = connectionHarness();
+    const attempted: number[] = [];
+    let accept = false;
+    subject.connectionLifecycle.scheduleReconnect = (_generation: number, _operation: unknown, delay: number) => {
+      attempted.push(delay);
+      if (accept) recorded.reconnects.push(delay);
+      return accept;
+    };
+    const update = { connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } };
+    await subject.connectionUpdate(update, subject.client, 0);
+    await subject.connectionUpdate(update, subject.client, 0);
+    accept = true;
+    await subject.connectionUpdate(update, subject.client, 0);
+    await subject.connectionUpdate(update, subject.client, 0);
+    assert.deepEqual(attempted, [3000, 3000, 3000, 6000]);
+    assert.deepEqual(recorded.reconnects, [3000, 6000]);
   });
 
   it('the real connection handler applies backoff and resets it when the connection opens', async () => {

@@ -551,7 +551,12 @@ export class BaileysStartupService extends ChannelStartupService {
         return;
       }
 
-      const shouldReconnect = !codesToNotReconnect.includes(statusCode);
+      // Baileys also reports an expired, never-scanned QR as 408. That is terminal: there are
+      // no credentials to preserve, and retrying would keep issuing QR codes until QRCODE_LIMIT.
+      const isQrTimeout =
+        statusCode === DisconnectReason.timedOut && lastDisconnect?.error?.message === 'QR refs attempts ended';
+
+      const shouldReconnect = !isQrTimeout && !codesToNotReconnect.includes(statusCode);
 
       this.logger.info({
         message: 'Connection closed, evaluating reconnection',
@@ -561,7 +566,7 @@ export class BaileysStartupService extends ChannelStartupService {
       });
 
       if (shouldReconnect) {
-        const reconnectDelay = this.connectionLifecycle.nextReconnectDelay();
+        const reconnectDelay = this.connectionLifecycle.reconnectDelay();
         const scheduled = this.connectionLifecycle.scheduleReconnect(
           generation,
           () => this.connectToWhatsapp(this.phoneNumber),
@@ -573,6 +578,9 @@ export class BaileysStartupService extends ChannelStartupService {
               error: error instanceof Error ? error.message : String(error),
             }),
         );
+        if (scheduled) {
+          this.connectionLifecycle.recordReconnectAttempt();
+        }
         this.logger.info(
           scheduled
             ? `Reconnecting in ${reconnectDelay / 1000} seconds...`
@@ -580,7 +588,11 @@ export class BaileysStartupService extends ChannelStartupService {
         );
       } else {
         this.connectionLifecycle.cancelReconnect();
-        this.logger.info(`Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`);
+        this.logger.info(
+          isQrTimeout
+            ? 'Skipping reconnection: QR code expired without being scanned'
+            : `Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`,
+        );
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
           status: 'closed',

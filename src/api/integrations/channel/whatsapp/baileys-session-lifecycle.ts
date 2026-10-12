@@ -67,10 +67,13 @@ export class BaileysConnectionLifecycle {
     return true;
   }
 
-  public nextReconnectDelay(): number {
-    const delay = Math.min(3000 * 2 ** Math.min(this.reconnectAttempts, 5), 60_000);
+  public reconnectDelay(): number {
+    return Math.min(3000 * 2 ** Math.min(this.reconnectAttempts, 5), 60_000);
+  }
+
+  // Only scheduled retries advance the backoff; skipped or superseded ones must not.
+  public recordReconnectAttempt(): void {
     this.reconnectAttempts += 1;
-    return delay;
   }
 
   public resetReconnectBackoff(): void {
