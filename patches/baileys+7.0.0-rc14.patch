@@ -79,3 +79,160 @@ index d61e064..fb734c9 100644
      };
      /**
       * generic send receipt function
+diff --git a/node_modules/baileys/lib/Socket/socket.js b/node_modules/baileys/lib/Socket/socket.js
+--- a/node_modules/baileys/lib/Socket/socket.js
++++ b/node_modules/baileys/lib/Socket/socket.js
+@@ -6,7 +6,7 @@
+ import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT, NOISE_WA_HEADER, PROCESSABLE_HISTORY_TYPES, TimeMs, UPLOAD_TIMEOUT } from '../Defaults/index.js';
+ import { QueryIds, ReachoutTimelockEnforcementType } from '../Types/index.js';
+ import { DisconnectReason, XWAPaths } from '../Types/index.js';
+-import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, buildPairingQRData, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getCompanionPlatformId, getErrorCodeFromStreamError, getNextPreKeysNode, makeEventBuffer, makeNoiseHandler, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
++import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, buildPairingQRData, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getCompanionPlatformId, getErrorCodeFromStreamError, getNextPreKeysNode, handleCompanionRegRefresh, makeEventBuffer, makeNoiseHandler, makePairingQRRenderer, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
+ import { assertNodeErrorFree, binaryNodeToString, encodeBinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, isLidUser, jidDecode, jidEncode, S_WHATSAPP_NET } from '../WABinary/index.js';
+ import { BinaryInfo } from '../WAM/BinaryInfo.js';
+ import { USyncQuery, USyncUser } from '../WAUSync/index.js';
+@@ -691,6 +691,7 @@
+     // the server terminated the connection
+     ws.on('CB:xmlstreamend', () => void end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed })));
+     // QR gen
++    let refreshPairingQR;
+     ws.on('CB:iq,type:set,pair-device', async (stanza) => {
+         const iq = {
+             tag: 'iq',
+@@ -705,24 +706,31 @@
+         const refNodes = getBinaryNodeChildren(pairDeviceNode, 'ref');
+         const noiseKeyB64 = Buffer.from(creds.noiseKey.public).toString('base64');
+         const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64');
+-        const advB64 = creds.advSecretKey;
++        const renderer = makePairingQRRenderer(refNodes.map(refNode => refNode.content.toString('utf-8')), ref => {
++            ev.emit('connection.update', { qr: buildPairingQRData(ref, noiseKeyB64, identityKeyB64, creds.advSecretKey, browser) });
++        });
++        refreshPairingQR = () => void renderer.refresh();
+         let qrMs = qrTimeout || 60000; // time to let a QR live
+         const genPairQR = () => {
+             if (!ws.isOpen) {
+                 return;
+             }
+-            const refNode = refNodes.shift();
+-            if (!refNode) {
++            if (!renderer.next()) {
+                 void end(new Boom('QR refs attempts ended', { statusCode: DisconnectReason.timedOut }));
+                 return;
+             }
+-            const ref = refNode.content.toString('utf-8');
+-            const qr = buildPairingQRData(ref, noiseKeyB64, identityKeyB64, advB64, browser);
+-            ev.emit('connection.update', { qr });
+             qrTimer = setTimeout(genPairQR, qrMs);
+             qrMs = qrTimeout || 20000; // shorter subsequent qrs
+         };
+         genPairQR();
++    });
++    ws.on('CB:notification,type:companion_reg_refresh', (node) => {
++        handleCompanionRegRefresh(node, {
++            creds,
++            emitCredsUpdate: update => ev.emit('creds.update', update),
++            refreshQR: () => refreshPairingQR?.(),
++            logger
++        });
+     });
+     // device paired for the first time
+     // if device pairs successfully, the server asks to restart the connection
+diff --git a/node_modules/baileys/lib/Socket/messages-recv.js b/node_modules/baileys/lib/Socket/messages-recv.js
+--- a/node_modules/baileys/lib/Socket/messages-recv.js
++++ b/node_modules/baileys/lib/Socket/messages-recv.js
+@@ -359,7 +359,11 @@
+         }
+     };
+     const sendMessageAck = async (node, errorCode) => {
+-        const stanza = buildAckStanza(node, errorCode, authState.creds.me.id);
++        const meId = authState.creds.me?.id;
++        if (node.tag === 'message' && !meId) {
++            throw new Boom('cannot ack a message before creds.me is set');
++        }
++        const stanza = buildAckStanza(node, errorCode, meId);
+         logger.debug({ recv: { tag: node.tag, attrs: node.attrs }, sent: stanza.attrs }, 'sent ack');
+         await sendNode(stanza);
+     };
+diff --git a/node_modules/baileys/lib/Utils/companion-reg-client-utils.js b/node_modules/baileys/lib/Utils/companion-reg-client-utils.js
+--- a/node_modules/baileys/lib/Utils/companion-reg-client-utils.js
++++ b/node_modules/baileys/lib/Utils/companion-reg-client-utils.js
+@@ -1,3 +1,5 @@
++import { randomBytes } from 'crypto';
++import { getBinaryNodeChild } from '../WABinary/index.js';
+ export var CompanionWebClientType;
+ (function (CompanionWebClientType) {
+     CompanionWebClientType[CompanionWebClientType["UNKNOWN"] = 0] = "UNKNOWN";
+@@ -32,4 +34,71 @@
+     return ('https://wa.me/settings/linked_devices#' +
+         [ref, noiseKeyB64, identityKeyB64, advB64, getCompanionPlatformId(browser)].join(','));
+ };
+-//# sourceMappingURL=companion-reg-client-utils.js.map
+\ No newline at end of file
++/**
++ * Holds the ref currently on screen so it can be re-rendered.
++ *
++ * `render` is called with the ref rather than a finished payload so the caller
++ * can read the adv secret at render time: a `companion_reg_refresh` rotates it
++ * mid-flow, and every QR emitted afterwards has to advertise the new value.
++ */
++export const makePairingQRRenderer = (refs, render) => {
++    let index = 0;
++    let current;
++    return {
++        next() {
++            const ref = refs[index];
++            if (ref === undefined) {
++                return false;
++            }
++            index += 1;
++            current = ref;
++            render(ref);
++            return true;
++        },
++        refresh() {
++            if (current === undefined) {
++                return false;
++            }
++            render(current);
++            return true;
++        }
++    };
++};
++/** The two children WA Web's parser accepts on this notification. */
++const COMPANION_REG_REFRESH_CHILDREN = ['companion_reg_refresh', 'pair-device-rotate-qr'];
++/**
++ * `<notification type="companion_reg_refresh">` - the server retiring an
++ * unpaired companion's registration material.
++ *
++ * WA Web accepts the stanza with either a `companion_reg_refresh` or a
++ * `pair-device-rotate-qr` child, rejects it when neither is present, and
++ * answers by regenerating the adv secret key. That key is a quarter of what
++ * the pairing QR advertises, so a client that only acks keeps offering a QR
++ * built on a secret the server has already retired: the phone scans it,
++ * reports a failed link, and no pair-success ever arrives.
++ *
++ * The ack itself is unchanged - the generic notification path already sends
++ * it - so this only adds the rotation and the re-render.
++ */
++export const handleCompanionRegRefresh = (node, { creds, emitCredsUpdate, refreshQR, logger }) => {
++    if (!COMPANION_REG_REFRESH_CHILDREN.some(tag => getBinaryNodeChild(node, tag))) {
++        logger.warn({ notificationType: 'companion_reg_refresh' }, 'companion_reg_refresh carries neither expected child; ignoring');
++        return 'ignored_malformed';
++    }
++    // WA Web rotates unconditionally; a registered session is the one case
++    // where that is wrong here. `creds.me` is set by pair-success and by
++    // requestPairingCode, and in both cases the adv secret is what a completed
++    // or pending pairing is verified against - re-minting it would break the
++    // session rather than refresh a pending registration.
++    if (creds.me) {
++        logger.debug({ notificationType: 'companion_reg_refresh' }, 'companion_reg_refresh on a registered session; keeping the adv secret');
++        return 'ignored_registered';
++    }
++    // Same construction as initAuthCreds and as WA Web's generateADVSecretKey:
++    // 32 CSPRNG bytes, base64.
++    creds.advSecretKey = randomBytes(32).toString('base64');
++    emitCredsUpdate({ advSecretKey: creds.advSecretKey });
++    logger.info({ notificationType: 'companion_reg_refresh' }, 'rotated the adv secret the server asked to retire; re-rendering the pairing QR');
++    refreshQR();
++    return 'rotated';
++};

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -71,6 +72,7 @@ function setup(name = 'meringuava') {
   const webhooks: unknown[][] = [];
   const saved: string[] = [];
   const errors: unknown[] = [];
+  const warnings: unknown[] = [];
   const writes: unknown[] = [];
   const sends: string[] = [];
   let callback!: (events: any) => Promise<void>;
@@ -87,7 +89,11 @@ function setup(name = 'meringuava') {
   handler.logger = Object.fromEntries(
     ['info', 'debug', 'warn', 'log', 'error'].map((key) => [
       key,
-      key === 'error' ? (error: unknown) => errors.push(error) : () => undefined,
+      key === 'error'
+        ? (error: unknown) => errors.push(error)
+        : key === 'warn'
+          ? (warning: unknown) => warnings.push(warning)
+          : () => undefined,
     ]),
   );
   handler.configService = { get: () => ({ ENABLED: false, SAVE_DATA: {} }) };
@@ -106,6 +112,8 @@ function setup(name = 'meringuava') {
   const connect = () => {
     const id = `${name}-${++clientIndex}`;
     const client = {
+      ws: new EventEmitter(),
+      authState: { creds: {} as { me?: object } },
       user: { id: `${name}@s.whatsapp.net` },
       ev: {
         process: (fn: typeof callback) => {
@@ -130,10 +138,30 @@ function setup(name = 'meringuava') {
     handler.eventHandler(client, generation);
     return { client, emit: callback, generation };
   };
-  return { handler, connect, processed, webhooks, saved, errors, writes, sends };
+  return { handler, connect, processed, webhooks, saved, errors, warnings, writes, sends };
 }
 
 describe('recuperação da fila de eventos Baileys sem replay', () => {
+  it('logs only a sanitized current unauthenticated registration-refresh marker', () => {
+    const h = setup();
+    const old = h.connect();
+    const current = h.connect();
+    old.client.ws.emit('CB:notification,type:companion_reg_refresh', { secret: 'never-log' });
+    assert.deepEqual(h.warnings, []);
+    current.client.ws.emit('CB:notification,type:companion_reg_refresh', { secret: 'never-log' });
+    assert.deepEqual(h.warnings, [
+      {
+        message: 'Baileys companion registration refresh received',
+        notificationType: 'companion_reg_refresh',
+        instanceName: 'meringuava',
+      },
+    ]);
+    current.client.authState.creds.me = {};
+    current.client.ws.emit('CB:notification,type:companion_reg_refresh', { secret: 'never-log' });
+    assert.equal(h.warnings.length, 1);
+    assert.deepEqual(h.sends, []);
+  });
+
   it('processa conexão e credenciais sem consultar configurações e sem enviar mensagens', async () => {
     const h = setup();
     let settingsReads = 0;

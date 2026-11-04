@@ -38,6 +38,7 @@ lerna-debug.log*
 !/test/whatsapp-baileys-session-recovery.test.ts
 !/test/whatsapp-baileys-event-recovery.test.ts
 !/test/whatsapp-baileys-qr-freshness.test.ts
+!/test/baileys-companion-reg-refresh.test.ts
 !/test/whatsapp-baileys-message-update.test.ts
 !/test/core-utils.test.ts
 !/test/validation-schemas.test.ts

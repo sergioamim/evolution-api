@@ -2174,6 +2174,15 @@ export class BaileysStartupService extends ChannelStartupService {
       !this.endSession && this.connectionLifecycle.isCurrent(generation) && client === this.client;
     const authState = this.instance.authState;
 
+    client.ws?.on('CB:notification,type:companion_reg_refresh', () => {
+      if (!isCurrent() || client.authState?.creds?.me) return;
+      this.logger.warn({
+        message: 'Baileys companion registration refresh received',
+        notificationType: 'companion_reg_refresh',
+        instanceName: this.instance.name,
+      });
+    });
+
     client.ev.process(async (events) => {
       if (!isCurrent()) {
         return;
