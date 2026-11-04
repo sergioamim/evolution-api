@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
@@ -123,27 +124,143 @@ function assertNoQr(result: any) {
   assert.equal(result.count, 0);
 }
 
+// Execute the installed provider function: rc14 sets creds.me before linking completes.
+function useProviderPairingRequest(
+  handler: any,
+  sendNode: (node: unknown) => Promise<unknown> = async () => undefined,
+) {
+  handler.client.authState.creds.noiseKey = { public: Buffer.from('synthetic-noise-key') };
+  const source = readFileSync('node_modules/baileys/lib/Socket/socket.js', 'utf8');
+  const start = source.indexOf('    const requestPairingCode =');
+  const end = source.indexOf('    async function generatePairingKey()', start);
+  assert.ok(start >= 0 && end > start);
+  handler.client.requestPairingCode = new Function(
+    'authState',
+    'ev',
+    'sendNode',
+    'jidEncode',
+    'bytesToCrockford',
+    'randomBytes',
+    'S_WHATSAPP_NET',
+    'generateMessageTag',
+    'generatePairingKey',
+    'getCompanionPlatformId',
+    'browser',
+    `${source.slice(start, end)}; return requestPairingCode;`,
+  )(
+    handler.client.authState,
+    { emit() {} },
+    sendNode,
+    (phone: string, server: string) => `${phone}@${server}`,
+    () => 'NEWCODE8',
+    randomBytes,
+    's.whatsapp.net',
+    () => 'synthetic-request',
+    async () => Buffer.from('synthetic-key'),
+    () => '1',
+    ['Baileys', 'Chrome', '1'],
+  );
+}
+
 describe('fresh QR only for the current unauthenticated Baileys client', () => {
   it('suppresses cached QR and pairing on authenticated reconnect through the actual controller', async () => {
     const h = setup();
+    h.handler.phoneNumber = 'synthetic-number';
+    h.handler.client.authState.creds.pairingCode = 'expired-pairing';
     assertNoQr(h.handler.qrCode);
     assertNoQr(await h.controller.connectToWhatsapp({ instanceName: 'meringuava' }));
     assert.deepEqual(h.handler.instance.qrcode, staleQr()); // Getter does not mutate a different lifecycle.
     assert.deepEqual(h.sends, []);
   });
 
-  it('returns a real newly generated QR even with a historical owner, and supports pairing', async () => {
+  it('returns a real newly generated QR even with a historical owner', async () => {
     const h = setup('meringuava', false);
-    h.handler.phoneNumber = 'synthetic-number';
     await h.update({ qr: 'new-ref' });
     h.callbacks[0](null, 'new-image');
     assert.deepEqual(await h.controller.connectToWhatsapp({ instanceName: 'meringuava' }), {
       count: 4,
       code: 'new-ref',
       base64: 'new-image',
-      pairingCode: 'new-pairing',
+      pairingCode: null,
     });
     assert.equal(h.webhooks.filter(([event]) => event === 'QRCODE_UPDATED').length, 1);
+    assert.deepEqual(h.sends, []);
+  });
+
+  it('returns only the current pending numeric code after the provider sets creds.me', async () => {
+    const h = setup('meringuava', false);
+    const sending = deferred();
+    h.handler.phoneNumber = 'synthetic-number';
+    useProviderPairingRequest(h.handler, () => sending.promise);
+    const pairing = h.update({ qr: 'current-ref' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(h.handler.client.authState.creds.me.id, 'synthetic-number@s.whatsapp.net');
+    assertNoQr(h.handler.qrCode); // No code is exposed before requestPairingCode resolves.
+    sending.resolve();
+    await pairing;
+    h.callbacks[0](null, 'current-image');
+    assert.deepEqual(await h.controller.connectToWhatsapp({ instanceName: 'meringuava' }), {
+      count: 0,
+      pairingCode: 'NEWCODE8',
+    });
+    assert.deepEqual(h.sends, []);
+  });
+
+  it('hides a pending numeric code after close, open, logout, or client/generation replacement', async () => {
+    for (const transition of ['close', 'open', 'logout', 'client', 'generation']) {
+      const h = setup('meringuava', false);
+      const other = setup('austin');
+      h.handler.phoneNumber = 'synthetic-number';
+      useProviderPairingRequest(h.handler);
+      await h.update({ qr: 'current-ref' });
+      assert.equal(h.handler.qrCode.pairingCode, 'NEWCODE8');
+      if (transition === 'close') {
+        h.handler.isDeleting = true; // Avoid reconnect IO in this lifecycle-only test.
+        await h.update({ connection: 'close' });
+        h.handler.isDeleting = false;
+      }
+      if (transition === 'open') await h.update({ connection: 'open' });
+      if (transition === 'logout') await h.handler.logoutInstance();
+      if (transition === 'client') h.handler.client = { ...h.handler.client };
+      if (transition === 'generation') h.handler.connectionLifecycle.beginConnection();
+      assertNoQr(h.handler.qrCode);
+      if (transition === 'close') {
+        h.handler.stateConnection = { state: 'connecting' };
+        assertNoQr(h.handler.qrCode);
+        assert.equal(h.handler.pendingPairingCode, undefined);
+      }
+      assertNoQr(other.handler.qrCode);
+      assert.deepEqual(h.sends, []);
+      assert.deepEqual(other.sends, []);
+      if (transition === 'open' || transition === 'logout') assert.equal(h.handler.pendingPairingCode, undefined);
+    }
+  });
+
+  it('does not publish a numeric code from a request superseded while the provider is sending', async () => {
+    const h = setup('meringuava', false);
+    const sending = deferred();
+    h.handler.phoneNumber = 'synthetic-number';
+    useProviderPairingRequest(h.handler, () => sending.promise);
+    const pairing = h.update({ qr: 'superseded-ref' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    h.handler.connectionLifecycle.beginConnection();
+    sending.resolve();
+    await pairing;
+    assertNoQr(h.handler.qrCode);
+    assert.equal(h.handler.pendingPairingCode, undefined);
+    assert.deepEqual(h.sends, []);
+  });
+
+  it('does not expose a code when the provider request fails after setting creds.me', async () => {
+    const h = setup('meringuava', false);
+    h.handler.phoneNumber = 'synthetic-number';
+    useProviderPairingRequest(h.handler, async () => {
+      throw new Error('synthetic transport failure');
+    });
+    await assert.rejects(h.update({ qr: 'failed-ref' }), /synthetic transport failure/);
+    assert.equal(h.handler.client.authState.creds.me.id, 'synthetic-number@s.whatsapp.net');
+    assertNoQr(h.handler.qrCode);
+    assert.equal(h.handler.pendingPairingCode, undefined);
     assert.deepEqual(h.sends, []);
   });
 

@@ -279,6 +279,7 @@ export class BaileysStartupService extends ChannelStartupService {
   private isDeleting = false; // Flag to prevent reconnection during deletion
   private readonly connectionLifecycle = new BaileysConnectionLifecycle();
   private connectionUpdateRevision = 0;
+  private pendingPairingCode?: { client: WASocket; generation: number; code: string };
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private readonly contactSyncInFlight = new Map<string, Promise<void>>();
 
@@ -301,6 +302,7 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async logoutInstance() {
+    this.pendingPairingCode = undefined;
     // Mark instance as deleting to prevent reconnection attempts.
     this.isDeleting = true;
     this.endSession = true;
@@ -394,6 +396,15 @@ export class BaileysStartupService extends ChannelStartupService {
 
   public get qrCode(): wa.QrCode {
     if (this.client?.authState?.creds?.me?.id) {
+      const pending = this.pendingPairingCode;
+      if (
+        pending?.client === this.client &&
+        this.connectionLifecycle.isCurrent(pending.generation) &&
+        this.stateConnection.state === 'connecting' &&
+        this.phoneNumber
+      ) {
+        return { count: 0, pairingCode: pending.code };
+      }
       return { count: 0 };
     }
     return {
@@ -476,6 +487,7 @@ export class BaileysStartupService extends ChannelStartupService {
         color: { light: '#ffffff', dark: color },
       };
 
+      this.pendingPairingCode = undefined;
       if (this.phoneNumber) {
         await delay(1000);
         if (!isCurrent()) {
@@ -483,6 +495,7 @@ export class BaileysStartupService extends ChannelStartupService {
         }
         const pairingCode = await client.requestPairingCode(this.phoneNumber);
         if (!isCurrent()) return;
+        this.pendingPairingCode = { client, generation, code: pairingCode };
         this.instance.qrcode.pairingCode = pairingCode;
       } else {
         this.instance.qrcode.pairingCode = null;
@@ -537,6 +550,7 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'close') {
+      this.pendingPairingCode = undefined;
       // Check if instance is being deleted or session is ending
       if (this.isDeleting || this.endSession) {
         this.logger.info('Instance is being deleted/ended, skipping reconnection attempt');
@@ -652,6 +666,7 @@ export class BaileysStartupService extends ChannelStartupService {
         return;
       }
       resetBaileysQrLifecycle(this.instance);
+      this.pendingPairingCode = undefined;
       this.instance.wuid = client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
