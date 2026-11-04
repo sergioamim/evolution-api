@@ -5,7 +5,10 @@ import { afterEach, describe, it } from 'node:test';
 
 import ts from 'typescript';
 
-import { BaileysConnectionLifecycle } from '../src/api/integrations/channel/whatsapp/baileys-session-lifecycle';
+import {
+  BaileysConnectionLifecycle,
+  resetBaileysQrLifecycle,
+} from '../src/api/integrations/channel/whatsapp/baileys-session-lifecycle';
 
 // Compile the production methods, without importing the server module (which opens DB/network clients).
 // All handlers below are the actual service implementation; only their IO dependencies are replaced.
@@ -39,10 +42,12 @@ const disconnectReason = {
   connectionReplaced: 440,
   connectionClosed: 428,
 };
-const Harness = new Function('Events', 'DisconnectReason', `${compiled}; return EventHarness;`)(
-  events,
-  disconnectReason,
-);
+const Harness = new Function(
+  'Events',
+  'DisconnectReason',
+  'resetBaileysQrLifecycle',
+  `${compiled}; return EventHarness;`,
+)(events, disconnectReason, resetBaileysQrLifecycle);
 
 const deferred = <T = void>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;

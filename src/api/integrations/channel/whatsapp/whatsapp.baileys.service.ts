@@ -393,6 +393,9 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public get qrCode(): wa.QrCode {
+    if (this.client?.authState?.creds?.me?.id) {
+      return { count: 0 };
+    }
     return {
       pairingCode: this.instance.qrcode?.pairingCode,
       code: this.instance.qrcode?.code,
@@ -648,6 +651,7 @@ export class BaileysStartupService extends ChannelStartupService {
         this.logger.warn('connectionUpdate: connection open but client.user is undefined, skipping');
         return;
       }
+      resetBaileysQrLifecycle(this.instance);
       this.instance.wuid = client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);

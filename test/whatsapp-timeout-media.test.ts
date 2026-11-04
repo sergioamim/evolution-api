@@ -6,7 +6,10 @@ import { runInNewContext } from 'node:vm';
 import { Boom } from '@hapi/boom';
 import ts from 'typescript';
 
-import { BaileysConnectionLifecycle } from '../src/api/integrations/channel/whatsapp/baileys-session-lifecycle';
+import {
+  BaileysConnectionLifecycle,
+  resetBaileysQrLifecycle,
+} from '../src/api/integrations/channel/whatsapp/baileys-session-lifecycle';
 import { InternalServerErrorException } from '../src/exceptions/500.exception';
 
 // Execute the owning methods without bootstrapping databases or a WhatsApp socket.
@@ -29,6 +32,7 @@ function serviceMethods(names: string[], dependencies: Record<string, unknown> =
     Events: { STATUS_INSTANCE: 'status.instance', CONNECTION_UPDATE: 'connection.update' },
     BadRequestException: Error,
     InternalServerErrorException,
+    resetBaileysQrLifecycle,
     ...dependencies,
   });
 }
