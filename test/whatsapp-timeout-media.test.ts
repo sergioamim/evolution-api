@@ -40,6 +40,7 @@ function connectionHarness() {
   subject.client = { ws: { close() {} }, end() {} };
   subject.logger = { info() {}, debug() {}, warn() {} };
   subject.connectionLifecycle = new BaileysConnectionLifecycle();
+  subject.connectionUpdateRevision = 0;
   subject.connectionLifecycle.scheduleReconnect = (_generation: number, _operation: unknown, delay: number) => {
     recorded.reconnects.push(delay);
     return true;
