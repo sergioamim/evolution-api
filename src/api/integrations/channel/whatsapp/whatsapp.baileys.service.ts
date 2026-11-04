@@ -278,8 +278,8 @@ export class BaileysStartupService extends ChannelStartupService {
   private endSession = false;
   private isDeleting = false; // Flag to prevent reconnection during deletion
   private readonly connectionLifecycle = new BaileysConnectionLifecycle();
+  private connectionUpdateRevision = 0;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
-  private eventProcessingQueue: Promise<void> = Promise.resolve();
   private readonly contactSyncInFlight = new Map<string, Promise<void>>();
 
   // Cumulative history sync counters (reset on new sync or completion)
@@ -406,7 +406,8 @@ export class BaileysStartupService extends ChannelStartupService {
     client: WASocket,
     generation: number,
   ) {
-    if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+    const isCurrentClient = () => this.connectionLifecycle.isCurrent(generation) && client === this.client;
+    if (!isCurrentClient()) {
       this.logger.debug({
         message: 'Ignoring connection update from superseded Baileys client',
         instanceName: this.instance.name,
@@ -414,6 +415,9 @@ export class BaileysStartupService extends ChannelStartupService {
       });
       return;
     }
+    if (connection || qr) this.connectionUpdateRevision += 1;
+    const revision = this.connectionUpdateRevision;
+    const isCurrent = () => isCurrentClient() && revision === this.connectionUpdateRevision;
     // Enhanced logging for connection updates
     const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
     this.logger.info({
@@ -441,12 +445,14 @@ export class BaileysStartupService extends ChannelStartupService {
           );
         }
 
+        const profileName = await this.getProfileName();
+        if (!isCurrent()) return;
         this.sendDataWebhook(Events.CONNECTION_UPDATE, {
           instance: this.instance.name,
           state: 'refused',
           statusReason: DisconnectReason.connectionClosed,
           wuid: this.instance.wuid,
-          profileName: await this.getProfileName(),
+          profileName,
           profilePictureUrl: this.instance.profilePictureUrl,
         });
 
@@ -469,16 +475,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
       if (this.phoneNumber) {
         await delay(1000);
-        if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+        if (!isCurrent()) {
           return;
         }
-        this.instance.qrcode.pairingCode = await client.requestPairingCode(this.phoneNumber);
+        const pairingCode = await client.requestPairingCode(this.phoneNumber);
+        if (!isCurrent()) return;
+        this.instance.qrcode.pairingCode = pairingCode;
       } else {
         this.instance.qrcode.pairingCode = null;
       }
 
       qrcode.toDataURL(qr, optsQrcode, (error, base64) => {
-        if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+        if (!isCurrent()) {
           return;
         }
         if (error) {
@@ -515,6 +523,7 @@ export class BaileysStartupService extends ChannelStartupService {
         where: { id: this.instanceId },
         data: { connectionStatus: 'connecting' },
       });
+      if (!isCurrent()) return;
     }
 
     if (connection) {
@@ -614,6 +623,7 @@ export class BaileysStartupService extends ChannelStartupService {
             disconnectionObject: JSON.stringify(lastDisconnect),
           },
         });
+        if (!isCurrent()) return;
 
         if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
           this.chatwootService.eventWhatsapp(
@@ -641,8 +651,10 @@ export class BaileysStartupService extends ChannelStartupService {
       this.instance.wuid = client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
+        if (!isCurrent()) return;
         this.instance.profilePictureUrl = profilePic.profilePictureUrl;
       } catch {
+        if (!isCurrent()) return;
         this.instance.profilePictureUrl = null;
       }
       const formattedWuid = this.instance.wuid.split('@')[0].padEnd(30, ' ');
@@ -660,15 +672,18 @@ export class BaileysStartupService extends ChannelStartupService {
       `,
       );
 
+      const profileName = (await this.getProfileName()) as string;
+      if (!isCurrent()) return;
       await this.prismaRepository.instance.update({
         where: { id: this.instanceId },
         data: {
           ownerJid: this.instance.wuid,
-          profileName: (await this.getProfileName()) as string,
+          profileName,
           profilePicUrl: this.instance.profilePictureUrl,
           connectionStatus: 'open',
         },
       });
+      if (!isCurrent()) return;
 
       if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
         this.chatwootService.eventWhatsapp(
@@ -682,7 +697,7 @@ export class BaileysStartupService extends ChannelStartupService {
       this.sendDataWebhook(Events.CONNECTION_UPDATE, {
         instance: this.instance.name,
         wuid: this.instance.wuid,
-        profileName: await this.getProfileName(),
+        profileName,
         profilePictureUrl: this.instance.profilePictureUrl,
         ...this.stateConnection,
       });
@@ -2148,17 +2163,46 @@ export class BaileysStartupService extends ChannelStartupService {
   };
 
   private eventHandler(client: WASocket, generation: number) {
+    // A blocked data handler belongs to this socket only. Reconnecting must not inherit its tail.
+    // Already-started IO cannot be cancelled here; fence queued work and boundaries between handlers.
+    let eventProcessingQueue: Promise<void> = Promise.resolve();
+    const isCurrent = () =>
+      !this.endSession && this.connectionLifecycle.isCurrent(generation) && client === this.client;
+    const authState = this.instance.authState;
+
     client.ev.process(async (events) => {
-      if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+      if (!isCurrent()) {
         return;
       }
-      this.eventProcessingQueue = this.eventProcessingQueue.then(async () => {
+
+      if (events['creds.update']) {
+        // Persist this socket's credentials independently; never use a replacement auth state.
+        void Promise.resolve()
+          .then(() => (isCurrent() ? authState.saveCreds() : undefined))
+          .catch((error) => this.logger.error(error));
+      }
+
+      // Connection control must stay available even when settings/history/message IO never settles.
+      // Do not race the data handler against a timeout: a timeout cannot cancel its side effects.
+      if (events['connection.update']) {
         try {
-          if (!this.endSession && this.connectionLifecycle.isCurrent(generation) && client === this.client) {
+          await this.connectionUpdate(events['connection.update'], client, generation);
+        } catch (error) {
+          this.logger.error(error);
+        }
+      }
+
+      if (!Object.keys(events).some((event) => event !== 'connection.update' && event !== 'creds.update')) {
+        return;
+      }
+
+      const processData = async () => {
+        try {
+          if (isCurrent()) {
             const database = this.configService.get<Database>('DATABASE');
             const settings = await this.findSettings();
 
-            if (!this.connectionLifecycle.isCurrent(generation) || client !== this.client) {
+            if (!isCurrent()) {
               return;
             }
 
@@ -2166,32 +2210,28 @@ export class BaileysStartupService extends ChannelStartupService {
               const call = events.call[0];
 
               if (settings?.rejectCall && call.status == 'offer') {
-                this.client.rejectCall(call.id, call.from);
+                await client.rejectCall(call.id, call.from);
+                if (!isCurrent()) return;
               }
 
               if (settings?.msgCall?.trim().length > 0 && call.status == 'offer') {
                 if (call.from.endsWith('@lid')) {
-                  call.from = await this.client.signalRepository.lidMapping.getPNForLID(call.from as string);
+                  call.from = await client.signalRepository.lidMapping.getPNForLID(call.from as string);
+                  if (!isCurrent()) return;
                 }
-                const msg = await this.client.sendMessage(call.from, { text: settings.msgCall });
+                const msg = await client.sendMessage(call.from, { text: settings.msgCall });
+                if (!isCurrent()) return;
 
-                this.client.ev.emit('messages.upsert', { messages: [msg], type: 'notify' });
+                client.ev.emit('messages.upsert', { messages: [msg], type: 'notify' });
               }
 
               this.sendDataWebhook(Events.CALL, call);
             }
 
-            if (events['connection.update']) {
-              await this.connectionUpdate(events['connection.update'], client, generation);
-            }
-
-            if (events['creds.update']) {
-              this.instance.authState.saveCreds();
-            }
-
             if (events['messaging-history.set']) {
               const payload = events['messaging-history.set'];
               await this.messageHandle['messaging-history.set'](payload);
+              if (!isCurrent()) return;
             }
 
             if (events['messages.upsert']) {
@@ -2199,11 +2239,13 @@ export class BaileysStartupService extends ChannelStartupService {
 
               // this.messageProcessor.processMessage(payload, settings);
               await this.messageHandle['messages.upsert'](payload, settings);
+              if (!isCurrent()) return;
             }
 
             if (events['messages.update']) {
               const payload = events['messages.update'];
               await this.messageHandle['messages.update'](payload, settings);
+              if (!isCurrent()) return;
             }
 
             if (events['message-receipt.update']) {
@@ -2221,6 +2263,7 @@ export class BaileysStartupService extends ChannelStartupService {
                   this.updateMessagesReadedByTimestamp(remoteJid, remotesJidMap[remoteJid]),
                 ),
               );
+              if (!isCurrent()) return;
             }
 
             if (events['presence.update']) {
@@ -2290,7 +2333,10 @@ export class BaileysStartupService extends ChannelStartupService {
         } catch (error) {
           this.logger.error(error);
         }
-      });
+      };
+
+      // Recover a rejected tail as well as a rejected batch. No failed batch is replayed.
+      eventProcessingQueue = eventProcessingQueue.then(processData, processData);
     });
   }
 
