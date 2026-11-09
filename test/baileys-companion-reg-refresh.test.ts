@@ -44,7 +44,7 @@ const pairDevice = () => ({
   ],
 });
 const fields = (qr: string) => qr.split('#')[1].split(',');
-function harness(me?: object) {
+function harness(me?: object, ackFailure?: Error) {
   const ws = new EventEmitter() as EventEmitter & { isOpen: boolean };
   ws.isOpen = true;
   const ev = new EventEmitter();
@@ -98,7 +98,10 @@ function harness(me?: object) {
     authState: { creds },
     buildAckStanza,
     Boom,
-    sendNode: async (node: any) => sent.push(node),
+    sendNode: async (node: any) => {
+      if (ackFailure) throw ackFailure;
+      sent.push(node);
+    },
     logger: { debug() {} },
   });
   const startPairing = async () => {
@@ -107,7 +110,16 @@ function harness(me?: object) {
   };
   const refresh = (child = 'companion_reg_refresh') =>
     ws.emit('CB:notification,type:companion_reg_refresh', notification(child));
-  return { ws, creds, qrs, updates, sent, ended, timers, logs, ack, startPairing, refresh };
+  const errors: unknown[] = [];
+  const handlersStart = recv.indexOf("    ws.on('CB:notification',");
+  const handlersEnd = recv.indexOf("    ev.on('call',", handlersStart);
+  assert.ok(handlersStart >= 0 && handlersEnd > handlersStart);
+  runInNewContext(recv.slice(handlersStart, handlersEnd), {
+    ws,
+    sendMessageAck: ack,
+    onUnexpectedError: (error: unknown, context: string) => errors.push({ error, context }),
+  });
+  return { ws, creds, qrs, updates, sent, ended, timers, logs, ack, startPairing, refresh, errors };
 }
 
 describe('Baileys rc14 companion registration refresh selective upstream patch', () => {
@@ -215,5 +227,26 @@ describe('Baileys rc14 companion registration refresh selective upstream patch',
     await h.ack({ tag: 'message', attrs: { id: 'message', from: 'sender@s.whatsapp.net', type: 'text' } });
     assert.equal(h.sent[0].attrs.from, 'austin@s.whatsapp.net');
     assert.equal(h.sent[0].attrs.to, 'sender@s.whatsapp.net');
+  });
+  it('ACKs a top-level status with its original addressing and no message or credential event', async () => {
+    const h = harness({ id: 'synthetic-companion@s.whatsapp.net' });
+    const attrs = { id: 'synthetic-status', from: 'status@broadcast', type: 'media', participant: 'synthetic@lid' };
+    assert.equal(h.ws.emit('CB:status', { tag: 'status', attrs }), true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(JSON.parse(JSON.stringify(h.sent)), [{
+      tag: 'ack',
+      attrs: { id: attrs.id, to: attrs.from, class: 'status', type: attrs.type, participant: attrs.participant },
+    }]);
+    assert.deepEqual(h.updates, []);
+    assert.deepEqual(h.errors, []);
+  });
+  it('reports a failed status ACK through the existing socket error handler', async () => {
+    const failure = new Error('synthetic transport failure');
+    const h = harness(undefined, failure);
+    h.ws.emit('CB:status', { tag: 'status', attrs: { id: 'synthetic-status', from: 'status@broadcast', type: 'text' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(h.errors, [{ error: failure, context: 'acking status' }]);
+    assert.deepEqual(h.sent, []);
+    assert.deepEqual(h.updates, []);
   });
 });
