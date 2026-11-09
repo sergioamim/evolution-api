@@ -1,5 +1,10 @@
 # Baileys rc14 selective fixes
 
+The patch acknowledges top-level WhatsApp Status stanzas using the existing protocol ACK path.
+It follows [Baileys PR #2866](https://github.com/WhiskeySockets/Baileys/pull/2866) at
+`40f64baf55e936d7f2d5664e7db2387ae8629b13`. Status events are acknowledged at the socket
+and are not decoded, persisted as chat messages, or sent to the webhook.
+
 `baileys+7.0.0-rc14.patch` retains the existing media connection fix and selectively backports companion registration refresh from [Baileys PR #2765](https://github.com/WhiskeySockets/Baileys/pull/2765), pinned to `042fe1f3ddacf63ac2288837fbc8a395556bbb6e` (open/unmerged when inspected on 2026-11-04).
 
 The backport updates three installed JavaScript files: `Socket/socket.js`, `Socket/messages-recv.js`, and `Utils/companion-reg-client-utils.js`. It accepts only the two upstream child forms, preserves any `creds.me` (including pending pairing-code identities), rotates the advertisement secret using 32 CSPRNG bytes, emits the credential update and renders the same QR reference without resetting its timer. Notification ACKs work before identity exists; message ACKs still require identity. Upstream diagnostic logs are sanitized: no stanza contents, IDs, QR references, or keys are logged. The Evolution marker logs only the notification type and instance for the current unpaired client.
